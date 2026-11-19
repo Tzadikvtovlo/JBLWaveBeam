@@ -1,0 +1,34 @@
+# Windows-only build of this patched copy (private repo). Upstream's multi-OS workflow was removed.
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup update stable --no-self-update && rustup default stable
+      - run: cargo test
+      - run: cargo build --release
+      - name: Package (program, devices/, locales/ at the top of the zip)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item target/release/jbl-headphones.exe dist/
+          Copy-Item -Recurse devices, locales dist/
+          Compress-Archive -Path dist/* -DestinationPath jbl-headphones-windows-x64.zip
+      # NetFree blocks the artifact storage host, but release assets download fine
+      - name: Publish as a release of this (private) repo
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "win-build-$env:GITHUB_RUN_NUMBER"
+          gh release create $tag jbl-headphones-windows-x64.zip target/release/jbl-headphones.exe --title $tag --notes "Windows build of the patched copy" --target $env:GITHUB_SHA
