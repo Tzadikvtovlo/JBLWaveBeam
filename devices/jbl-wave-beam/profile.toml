@@ -1,0 +1,51 @@
+# JBL Wave Beam (first generation), written by hand from what a real unit answered over BLE
+# (product id 0x2091, no ANC: ambient/talk-thru/off only; answers EQ, gestures, beep, voice
+# prompt and serial requests; does not answer balance, smart audio, tips, standby or features).
+# Gesture ids and the EQ category numbers are the same as the Tune Flex 2 / Wave Buds 2 ones.
+
+name = "JBL Wave Beam"
+product_ids = [0x2091]
+name_prefixes = ["JBL WAVE BEAM", "JBL Wave Beam"]
+noise_modes = ["ambient", "talk_thru", "off"]
+find_buds = true
+
+gestures = [
+    { id = 6, side = "left", kind = "tap" },
+    { id = 7, side = "left", kind = "double_tap" },
+    { id = 8, side = "left", kind = "triple_tap" },
+    { id = 12, side = "left", kind = "hold" },
+    { id = 9, side = "right", kind = "tap" },
+    { id = 10, side = "right", kind = "double_tap" },
+    { id = 11, side = "right", kind = "triple_tap" },
+    { id = 14, side = "right", kind = "hold" },
+]
+actions = [
+    { id = 0x00, name = "none" },
+    { id = 0x08, name = "play_pause" },
+    { id = 0x05, name = "next" },
+    { id = 0x06, name = "previous" },
+    { id = 0x01, name = "volume_up" },
+    { id = 0x02, name = "volume_down" },
+    { id = 0x04, name = "talk_thru" },
+    { id = 0x0D, name = "ambient_off" },
+    { id = 0xA1, name = "voice_assistant" },
+]
+
+settings = [
+    { name = "voice_prompts", section = "device", kind = "switch", register = "voice_prompt" },
+    { name = "power_off", section = "device", kind = "button", command = "power_off" },
+    { name = "serial", section = "about", kind = "info", register = "serial", format = "text" },
+]
+
+[eq]
+max_db = 6.0
+bands = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
+# standard_preset_eq.json, group "wave" (as the Wave Buds 2); category = what the device gets
+presets = [
+    { name = "studio", category = 7, gains = [-2, -1, -1, -0.5, 0, 0, 0, 0, 0, 0] },
+    { name = "bass", category = 3, gains = [4, 4, 3, 2.5, 0.5, 0, 0, 0, 0, 0] },
+    { name = "club", category = 6, gains = [2, 1.5, 1, 0, 0, 0, 0, 1, 1, 2] },
+    { name = "extreme_bass", category = 9, gains = [4, 4.5, 4.5, 3.5, -1, 0, 0, 2, 2, 0] },
+    { name = "vocal", category = 2, gains = [-1.5, -3, -3, 1, 3.5, 3.5, 3, 1.5, 0, -1.5] },
+    { name = "jazz", category = 1, gains = [4, 3, 1, 2.5, -1.5, -1.5, 0, 1, 3, 4] },
+]

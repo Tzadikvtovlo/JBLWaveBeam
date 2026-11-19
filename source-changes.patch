@@ -1,0 +1,235 @@
+diff --git a/devices/jbl-wave-beam/profile.toml b/devices/jbl-wave-beam/profile.toml
+new file mode 100644
+index 0000000..0cfdb84
+--- /dev/null
++++ b/devices/jbl-wave-beam/profile.toml
+@@ -0,0 +1,51 @@
++# JBL Wave Beam (first generation), written by hand from what a real unit answered over BLE
++# (product id 0x2091, no ANC: ambient/talk-thru/off only; answers EQ, gestures, beep, voice
++# prompt and serial requests; does not answer balance, smart audio, tips, standby or features).
++# Gesture ids and the EQ category numbers are the same as the Tune Flex 2 / Wave Buds 2 ones.
++
++name = "JBL Wave Beam"
++product_ids = [0x2091]
++name_prefixes = ["JBL WAVE BEAM", "JBL Wave Beam"]
++noise_modes = ["ambient", "talk_thru", "off"]
++find_buds = true
++
++gestures = [
++    { id = 6, side = "left", kind = "tap" },
++    { id = 7, side = "left", kind = "double_tap" },
++    { id = 8, side = "left", kind = "triple_tap" },
++    { id = 12, side = "left", kind = "hold" },
++    { id = 9, side = "right", kind = "tap" },
++    { id = 10, side = "right", kind = "double_tap" },
++    { id = 11, side = "right", kind = "triple_tap" },
++    { id = 14, side = "right", kind = "hold" },
++]
++actions = [
++    { id = 0x00, name = "none" },
++    { id = 0x08, name = "play_pause" },
++    { id = 0x05, name = "next" },
++    { id = 0x06, name = "previous" },
++    { id = 0x01, name = "volume_up" },
++    { id = 0x02, name = "volume_down" },
++    { id = 0x04, name = "talk_thru" },
++    { id = 0x0D, name = "ambient_off" },
++    { id = 0xA1, name = "voice_assistant" },
++]
++
++settings = [
++    { name = "voice_prompts", section = "device", kind = "switch", register = "voice_prompt" },
++    { name = "power_off", section = "device", kind = "button", command = "power_off" },
++    { name = "serial", section = "about", kind = "info", register = "serial", format = "text" },
++]
++
++[eq]
++max_db = 6.0
++bands = [32, 64, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
++# standard_preset_eq.json, group "wave" (as the Wave Buds 2); category = what the device gets
++presets = [
++    { name = "studio", category = 7, gains = [-2, -1, -1, -0.5, 0, 0, 0, 0, 0, 0] },
++    { name = "bass", category = 3, gains = [4, 4, 3, 2.5, 0.5, 0, 0, 0, 0, 0] },
++    { name = "club", category = 6, gains = [2, 1.5, 1, 0, 0, 0, 0, 1, 1, 2] },
++    { name = "extreme_bass", category = 9, gains = [4, 4.5, 4.5, 3.5, -1, 0, 0, 2, 2, 0] },
++    { name = "vocal", category = 2, gains = [-1.5, -3, -3, 1, 3.5, 3.5, 3, 1.5, 0, -1.5] },
++    { name = "jazz", category = 1, gains = [4, 3, 1, 2.5, -1.5, -1.5, 0, 1, 3, 4] },
++]
+diff --git a/src/app.rs b/src/app.rs
+index 8eb7be4..9f79519 100644
+--- a/src/app.rs
++++ b/src/app.rs
+@@ -34,6 +34,13 @@ pub enum AppEvent {
+ /// In the background: looks for a newer release and, with `install`, puts it in place (then the
+ /// app restarts). macOS releases are the Swift app: the Rust one there never updates itself.
+ fn check_update(proxy: EventLoopProxy<AppEvent>, install: bool) {
++    // This patched copy never contacts the upstream project's releases (an update would replace
++    // it with a build that lacks the Windows fix) and never installs anything by itself.
++    const UPDATES_DISABLED: bool = true;
++    if UPDATES_DISABLED {
++        let _ = proxy.send_event(AppEvent::Update(update::Status::UpToDate));
++        return;
++    }
+     if cfg!(target_os = "macos") {
+         return;
+     }
+diff --git a/src/bluetooth/mod.rs b/src/bluetooth/mod.rs
+index 458d735..9961dcd 100644
+--- a/src/bluetooth/mod.rs
++++ b/src/bluetooth/mod.rs
+@@ -140,7 +140,7 @@ async fn candidates(central: &Adapter, prefixes: &[String]) -> Vec<(Peripheral,
+     let mut v = paired(central, prefixes).await;
+     let options = RetrievePeripheralsOptions { services: Some(vec![jbl::SERVICE]), ..Default::default() };
+     let connected = central.retrieve_peripherals(options).await.unwrap_or_default();
+-    let here = connected_here();
++    let here = connected_here().await;
+     let scanned = central.peripherals().await.unwrap_or_default();
+     for (p, ours) in connected.into_iter().map(|p| (p, true)).chain(scanned.into_iter().map(|p| (p, false))) {
+         let name = advertised_name(&p).await;
+@@ -162,7 +162,7 @@ async fn candidates(central: &Adapter, prefixes: &[String]) -> Vec<(Peripheral,
+ 
+ /// macOS: names of the devices paired with this Mac and connected to it now (audio included).
+ #[cfg(target_os = "macos")]
+-fn connected_here() -> Vec<String> {
++async fn connected_here() -> Vec<String> {
+     use std::ffi::{CStr, c_char};
+ 
+     use objc2::msg_send;
+@@ -192,8 +192,29 @@ fn connected_here() -> Vec<String> {
+     })
+ }
+ 
+-#[cfg(not(target_os = "macos"))]
+-fn connected_here() -> Vec<String> {
++/// Windows: names of the devices paired with this PC and connected to it now for audio (classic
++/// Bluetooth). Earbuds like the Wave Beam advertise their control service on BLE under a random
++/// address Windows never pairs, so this list is the only way to tell they are ours.
++#[cfg(windows)]
++async fn connected_here() -> Vec<String> {
++    use windows::Devices::Bluetooth::{BluetoothConnectionStatus, BluetoothDevice};
++    use windows::Devices::Enumeration::DeviceInformation;
++    let run = async {
++        let selector = BluetoothDevice::GetDeviceSelectorFromPairingState(true)?;
++        let mut names = vec![];
++        for info in DeviceInformation::FindAllAsyncAqsFilter(&selector)?.await? {
++            let Ok(device) = BluetoothDevice::FromIdAsync(&info.Id()?)?.await else { continue };
++            if device.ConnectionStatus()? == BluetoothConnectionStatus::Connected {
++                names.push(device.Name()?.to_string());
++            }
++        }
++        windows::core::Result::Ok(names)
++    };
++    run.await.unwrap_or_default()
++}
++
++#[cfg(not(any(target_os = "macos", windows)))]
++async fn connected_here() -> Vec<String> {
+     vec![]
+ }
+ 
+diff --git a/src/data.rs b/src/data.rs
+index 3eaa3b1..b328afb 100644
+--- a/src/data.rs
++++ b/src/data.rs
+@@ -4,6 +4,13 @@
+ use std::path::{Path, PathBuf};
+ use std::sync::OnceLock;
+ 
++/// Single-file build: when no `devices/` folder is found next to the program, these copies, which
++/// are compiled into it, are used (the generic JBL profile and the Wave Beam; no photos).
++pub const EMBEDDED_PROFILES: [&str; 2] =
++    [include_str!("../devices/jbl-generic/profile.toml"), include_str!("../devices/jbl-wave-beam/profile.toml")];
++pub const EMBEDDED_LOCALES: [(&str, &str); 2] =
++    [("en", include_str!("../locales/en.toml")), ("pt-BR", include_str!("../locales/pt-BR.toml"))];
++
+ pub fn root() -> Option<&'static Path> {
+     static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+     ROOT.get_or_init(|| {
+diff --git a/src/i18n.rs b/src/i18n.rs
+index dd7174e..c16310d 100644
+--- a/src/i18n.rs
++++ b/src/i18n.rs
+@@ -32,14 +32,17 @@ pub fn tf(key: &str, args: &[(&str, &dyn Display)]) -> String {
+ 
+ /// `pt-BR` → pt-BR.toml; otherwise any file of the same language (pt.toml, pt-PT.toml).
+ fn pick(wanted: &str) -> Option<String> {
+-    let dir = crate::data::root()?.join("locales");
+-    let files: Vec<String> = std::fs::read_dir(dir)
+-        .ok()?
+-        .flatten()
+-        .map(|e| e.path())
+-        .filter(|p| p.extension().is_some_and(|x| x == "toml"))
+-        .filter_map(|p| Some(p.file_stem()?.to_str()?.to_string()))
+-        .collect();
++    let files: Vec<String> = match crate::data::root() {
++        Some(root) => std::fs::read_dir(root.join("locales"))
++            .ok()?
++            .flatten()
++            .map(|e| e.path())
++            .filter(|p| p.extension().is_some_and(|x| x == "toml"))
++            .filter_map(|p| Some(p.file_stem()?.to_str()?.to_string()))
++            .collect(),
++        // single-file build: the languages compiled into the program
++        None => crate::data::EMBEDDED_LOCALES.iter().map(|(n, _)| n.to_string()).collect(),
++    };
+     // Linux hands out "pt_BR.UTF-8"
+     let wanted = wanted.split('.').next().unwrap_or_default().replace('_', "-");
+     let language = |s: &str| s.split('-').next().unwrap_or_default().to_ascii_lowercase();
+@@ -53,7 +56,15 @@ fn pick(wanted: &str) -> Option<String> {
+ /// Reads a locale file into flat keys: `[list] title` → `list.title`.
+ fn load(name: &str) -> HashMap<String, String> {
+     let mut out = HashMap::new();
+-    let Some(root) = crate::data::root() else { return out };
++    let Some(root) = crate::data::root() else {
++        // single-file build: the language compiled into the program
++        if let Some((_, text)) = crate::data::EMBEDDED_LOCALES.iter().find(|(n, _)| *n == name) {
++            if let Ok(table) = toml::from_str::<toml::Table>(text) {
++                flatten("", &table, &mut out);
++            }
++        }
++        return out;
++    };
+     let path = root.join("locales").join(format!("{name}.toml"));
+     match std::fs::read_to_string(&path).map(|s| toml::from_str::<toml::Table>(&s)) {
+         Ok(Ok(table)) => flatten("", &table, &mut out),
+diff --git a/src/profile.rs b/src/profile.rs
+index a80a694..2a5f604 100644
+--- a/src/profile.rs
++++ b/src/profile.rs
+@@ -203,8 +203,17 @@ impl Profile {
+ 
+ pub fn load_all() -> Vec<Rc<Profile>> {
+     let Some(root) = crate::data::root() else {
+-        eprintln!("{}", t("error.no_data"));
+-        return vec![];
++        // no devices/ folder next to the program: the profiles compiled into it
++        return crate::data::EMBEDDED_PROFILES
++            .iter()
++            .filter_map(|text| match toml::from_str::<Profile>(text) {
++                Ok(p) => Some(Rc::new(p)),
++                Err(e) => {
++                    eprintln!("{}: {e}", t("error.no_data"));
++                    None
++                }
++            })
++            .collect();
+     };
+     let mut dirs: Vec<PathBuf> =
+         std::fs::read_dir(root.join("devices")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+diff --git a/src/update.rs b/src/update.rs
+index 819d257..5a040a5 100644
+--- a/src/update.rs
++++ b/src/update.rs
+@@ -156,9 +156,10 @@ fn auto_file() -> Option<PathBuf> {
+     Some(base.join("jbl-headphones").join("auto-update"))
+ }
+ 
+-/// Updates install by themselves when the app starts (on by default).
++/// Updates install by themselves when the app starts (OFF by default in this build: it would
++/// replace the patched program with the upstream release).
+ pub fn auto() -> bool {
+-    auto_file().and_then(|f| std::fs::read_to_string(f).ok()).is_none_or(|s| s.trim() != "off")
++    auto_file().and_then(|f| std::fs::read_to_string(f).ok()).is_some_and(|s| s.trim() == "on")
+ }
+ 
+ pub fn set_auto(on: bool) {
